@@ -30,17 +30,29 @@ const COCO_LABELS = [
   'teddy bear','hair drier','toothbrush',
 ];
 
-// ─── Base64 encoding on JS thread ─────────────────────────────────────────
+// ─── Base64 encoding on UI thread (worklet) ───────────────────────────────
 function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = '';
+  'worklet';
+  // Use a standard character mapping array to avoid call stack limits in Hermes
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
   const len = bytes.byteLength;
-  const chunkSize = 8192; // Process in 8KB chunks to avoid stack overflow and speed up 100x
-  for (let i = 0; i < len; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    // @ts-ignore
-    binary += String.fromCharCode.apply(null, chunk);
+  let base64 = '';
+
+  for (let i = 0; i < len; i += 3) {
+    const b1 = bytes[i];
+    const b2 = i + 1 < len ? bytes[i + 1] : 0;
+    const b3 = i + 2 < len ? bytes[i + 2] : 0;
+
+    const enc1 = b1 >> 2;
+    const enc2 = ((b1 & 3) << 4) | (b2 >> 4);
+    const enc3 = ((b2 & 15) << 2) | (b3 >> 6);
+    const enc4 = b3 & 63;
+
+    base64 += chars[enc1] + chars[enc2];
+    base64 += i + 1 < len ? chars[enc3] : '=';
+    base64 += i + 2 < len ? chars[enc4] : '=';
   }
-  return btoa(binary);
+  return base64;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────
@@ -91,14 +103,11 @@ export function CameraView() {
 
   // ── Step 2e: UI state update — separate from network layer
   const onStableDetection = useCallback(
-    (rawBytes: Uint8Array, hazardBbox: number[]) => {
-      console.log(`[FixSight] onStableDetection triggered! Received ${rawBytes.byteLength} bytes.`);
-      // Convert bytes → base64 on JS thread
-      const base64 = uint8ToBase64(rawBytes);
-      console.log(`[FixSight] Encoded to base64 length: ${base64.length}`);
+    (base64Str: string, hazardBbox: number[]) => {
+      console.log(`[FixSight] onStableDetection triggered! Base64 size: ${base64Str.length}`);
       
       markAnalysisSent();
-      sendSceneFrame(base64, hazardBbox);
+      sendSceneFrame(base64Str, hazardBbox);
       startAnalysis();
     },
     [markAnalysisSent, sendSceneFrame, startAnalysis]
@@ -168,8 +177,9 @@ export function CameraView() {
               pixelFormat: 'rgb',
               dataType: 'uint8',
             });
+            const b64 = uint8ToBase64(fullFrameBytes);
             // Send empty bbox since it was a manual scan
-            runOnJS(onStableDetection)(fullFrameBytes, []);
+            runOnJS(onStableDetection)(b64, []);
             return;
         }
 
@@ -210,9 +220,10 @@ export function CameraView() {
               pixelFormat: 'rgb',
               dataType: 'uint8',
             });
+            const b64 = uint8ToBase64(fullFrameBytes);
 
-            // Bridge bytes to JS thread for btoa encoding
-            runOnJS(onStableDetection)(fullFrameBytes, bbox);
+            // Bridge string to JS thread (avoids Uint8Array drop bug)
+            runOnJS(onStableDetection)(b64, bbox);
 
             // Only send the first stable detection per cooldown window
             break;
