@@ -34,12 +34,12 @@ class HazardDetector:
             from PIL import Image
             import io
             
-            # The app sends raw RGB bytes (640x640) encoded in base64.
+            # The app sends raw RGB bytes (320x320) encoded in base64.
             # We must convert this to a valid JPEG for the Groq Vision model.
             try:
                 raw_bytes = base64.b64decode(full_frame_b64)
-                if len(raw_bytes) == 640 * 640 * 3:
-                    img = Image.frombytes("RGB", (640, 640), raw_bytes)
+                if len(raw_bytes) == 320 * 320 * 3:
+                    img = Image.frombytes("RGB", (320, 320), raw_bytes)
                     jpeg_io = io.BytesIO()
                     img.save(jpeg_io, format="JPEG", quality=80)
                     valid_jpeg_b64 = base64.b64encode(jpeg_io.getvalue()).decode("utf-8")

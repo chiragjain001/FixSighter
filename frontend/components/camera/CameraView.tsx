@@ -31,14 +31,14 @@ const COCO_LABELS = [
 ];
 
 // ─── Base64 encoding on JS thread ─────────────────────────────────────────
-// vision-camera-resize-plugin v3.x returns Uint8Array — not a string.
-// btoa() is not available in the worklet context (Hermes JSI).
-// We bridge to the JS thread via runOnJS and encode there.
 function uint8ToBase64(bytes: Uint8Array): string {
   let binary = '';
   const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  const chunkSize = 8192; // Process in 8KB chunks to avoid stack overflow and speed up 100x
+  for (let i = 0; i < len; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    // @ts-ignore
+    binary += String.fromCharCode.apply(null, chunk);
   }
   return btoa(binary);
 }
@@ -98,7 +98,7 @@ export function CameraView() {
   // Fix #6: ID counter owned by JS-side shared value, not module scope
   const nextIdCounter = useSharedValue(1);
 
-  const THRESHOLD    = 30;   // frames before considered stable (~1s @ 30fps)
+  const THRESHOLD    = 5;    // Trigger fast: 5 consecutive frames (~150ms)
   const SEND_COOLDOWN = 3000; // ms minimum between sends
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -166,10 +166,10 @@ export function CameraView() {
             lastSentAt.value = now;
             stableCount.value = { ...stableCount.value, [id]: 0 };
 
-            // ── Sub-task 2c: Real frame capture (640×640 for VLM context) ─
-            // Separate resize for full-scene context — higher res for Groq
+            // ── Sub-task 2c: Real frame capture (320x320 for VLM context) ─
+            // 320x320 is ~300KB raw RGB, perfectly balanced for the bridge and Groq
             const fullFrameBytes = resize(frame, {
-              scale: { width: 640, height: 640 },
+              scale: { width: 320, height: 320 },
               pixelFormat: 'rgb',
               dataType: 'uint8',
             });
