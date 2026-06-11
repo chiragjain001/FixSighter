@@ -62,6 +62,9 @@ async def websocket_endpoint(websocket: WebSocket):
             if payload.get("event") != "scene_frame_ready":
                 continue
 
+            print(f"\n[Backend] 📸 Received image frame from phone! (Size: {len(payload.get('full_frame_b64', ''))} bytes)")
+            print("[Backend] 🧠 Sending image to Groq VLM for analysis...")
+
             result = await asyncio.to_thread(
                 detector.analyze_scene,
                 payload["full_frame_b64"],
@@ -69,9 +72,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 payload.get("session_id", "default"),
                 payload.get("device_context", {}),
             )
+            
+            print(f"[Backend] ✅ Analysis Complete! Found: {result.get('primary_hazard')}")
+            print(f"[Backend] 📡 Sending solutions back to phone...")
             await websocket.send_json(result)
     except WebSocketDisconnect:
-        pass
+        print("\n[Backend] Phone disconnected from WebSocket.")
     except Exception as e:
         await websocket.send_json({"event": "error", "message": str(e)})
 
