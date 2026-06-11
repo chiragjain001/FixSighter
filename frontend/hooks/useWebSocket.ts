@@ -28,7 +28,18 @@ export function useWebSocket() {
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
+        
+        // Fix #2: Handle backend errors explicitly (Groq API failure, bad key, etc.)
+        if (data.event === 'error') {
+          console.error('[WS Backend Error]:', data.message);
+          resetScene();
+          resetWorkflow();
+          return;
+        }
+        
         if (data.event !== 'scene_analysis_complete') return;
+        
+        console.log('[WS] Got analysis response:', data.primary_hazard, '| Risk:', data.risk_level);
         
         // Validate required fields before touching any store
         if (!validateSceneAnalysis(data)) {

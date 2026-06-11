@@ -1,4 +1,5 @@
 import React, { useEffect, useCallback, useRef } from 'react';
+import { encode as btoaPolyfill } from 'base-64';
 import { StyleSheet, Text, View } from 'react-native';
 import {
   Camera,
@@ -30,29 +31,17 @@ const COCO_LABELS = [
   'teddy bear','hair drier','toothbrush',
 ];
 
-// ─── Base64 encoding on UI thread (worklet) ───────────────────────────────
+// ─── Base64 encoding (JS thread, uses base-64 polyfill) ─────────────────────
 function uint8ToBase64(bytes: Uint8Array): string {
-  'worklet';
-  // Use a standard character mapping array to avoid call stack limits in Hermes
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let binary = '';
   const len = bytes.byteLength;
-  let base64 = '';
-
-  for (let i = 0; i < len; i += 3) {
-    const b1 = bytes[i];
-    const b2 = i + 1 < len ? bytes[i + 1] : 0;
-    const b3 = i + 2 < len ? bytes[i + 2] : 0;
-
-    const enc1 = b1 >> 2;
-    const enc2 = ((b1 & 3) << 4) | (b2 >> 4);
-    const enc3 = ((b2 & 15) << 2) | (b3 >> 6);
-    const enc4 = b3 & 63;
-
-    base64 += chars[enc1] + chars[enc2];
-    base64 += i + 1 < len ? chars[enc3] : '=';
-    base64 += i + 2 < len ? chars[enc4] : '=';
+  const chunkSize = 8192;
+  for (let i = 0; i < len; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    // @ts-ignore
+    binary += String.fromCharCode.apply(null, chunk);
   }
-  return base64;
+  return btoaPolyfill(binary); // polyfill works in React Native Hermes runtime
 }
 
 // ─── Component ────────────────────────────────────────────────────────────
@@ -229,8 +218,9 @@ export function CameraView() {
             break;
           }
         }
-      } catch {
-        // Silently ignore per-frame errors — never crash the worklet
+      } catch (err) {
+        // Log errors so we can see them in Metro console
+        console.log('[FrameProcessor Error]:', err);
       }
     },
     [model, resize]
