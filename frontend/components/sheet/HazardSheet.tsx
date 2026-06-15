@@ -21,6 +21,7 @@ import Animated, {
   withSpring,
   withRepeat,
 } from 'react-native-reanimated';
+import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import {
   CheckCircle,
@@ -31,6 +32,7 @@ import {
   Brush,
   Plus,
   ChevronUp,
+  MapPin,
 } from 'lucide-react-native';
 import { useWorkflowStore } from '../../store/workflowStore';
 import type { ActionStep, RiskLevel } from '../../src/types';
@@ -65,25 +67,29 @@ function StepCard({
   action,
   index,
   isCompleted,
+  isActive,
   onToggle,
+  onPress,
 }: {
   action: ActionStep;
   index: number;
   isCompleted: boolean;
+  isActive: boolean;
   onToggle: () => void;
+  onPress: () => void;
 }) {
   const scale = useSharedValue(1);
   const cardStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
-    backgroundColor: isCompleted ? 'rgba(74,222,128,0.07)' : 'rgba(255,255,255,0.04)',
-    borderColor: isCompleted ? 'rgba(74,222,128,0.22)' : 'rgba(255,255,255,0.08)',
+    backgroundColor: isCompleted ? 'rgba(74,222,128,0.07)' : isActive ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
+    borderColor: isCompleted ? 'rgba(74,222,128,0.22)' : isActive ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.08)',
   }));
 
   return (
     <Pressable
       onPress={() => {
         scale.value = withSequence(withTiming(0.97, { duration: 70 }), withSpring(1, { damping: 12 }));
-        onToggle();
+        onPress();
       }}
     >
       <Animated.View entering={FadeIn.delay(index * 80).duration(300)} style={[styles.stepCard, cardStyle]}>
@@ -108,12 +114,18 @@ function StepCard({
             <Text style={styles.stepTime}>{action.estimatedTime}</Text>
           )}
         </View>
-        <View>
+        {/* AR-pin indicator: shown when step is active — tells user AR is focused here */}
+        {isActive && !isCompleted && (
+          <Animated.View entering={FadeIn.duration(200)} style={styles.arPinBadge}>
+            <MapPin color="#60a5fa" size={13} strokeWidth={2.5} />
+          </Animated.View>
+        )}
+        <Pressable onPress={onToggle} hitSlop={10}>
           {isCompleted
-            ? <Animated.View entering={FadeIn.duration(200)}><CheckCircle color="#4ade80" size={22} strokeWidth={2} /></Animated.View>
-            : <Circle color="rgba(255,255,255,0.2)" size={22} strokeWidth={1.5} />
+            ? <Animated.View entering={FadeIn.duration(200)}><CheckCircle color="#4ade80" size={26} strokeWidth={2} /></Animated.View>
+            : <Circle color={isActive ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.2)"} size={26} strokeWidth={1.5} />
           }
-        </View>
+        </Pressable>
       </Animated.View>
     </Pressable>
   );
@@ -150,6 +162,42 @@ function ArrowIndicator({ onPress }: { onPress: () => void }) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Skeleton Body (Analyzing State)
+// ─────────────────────────────────────────────────────────────────
+function SkeletonBody() {
+  const op = useSharedValue(0.2);
+  useEffect(() => {
+    op.value = withRepeat(
+      withSequence(withTiming(0.6, { duration: 800 }), withTiming(0.2, { duration: 800 })),
+      -1,
+      true
+    );
+  }, []);
+
+  const animStyle = useAnimatedStyle(() => ({ opacity: op.value }));
+
+  return (
+    <Animated.View style={[{ paddingTop: 12 }, animStyle]}>
+      {/* Header Placeholder */}
+      <View style={{ width: 70, height: 14, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 4, marginBottom: 14 }} />
+      
+      {/* Title Placeholder */}
+      <View style={{ width: '80%', height: 32, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, marginBottom: 8 }} />
+      <View style={{ width: '50%', height: 16, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 4, marginBottom: 24 }} />
+      
+      {/* Tags Placeholder */}
+      <View style={{ flexDirection: 'row', gap: 10, marginBottom: 30 }}>
+        <View style={{ width: 70, height: 28, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 14 }} />
+        <View style={{ width: 90, height: 28, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 14 }} />
+      </View>
+
+      {/* Button Placeholder */}
+      <View style={{ width: 140, height: 48, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 16 }} />
+    </Animated.View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Sheet body content — shared between portrait & landscape
 // ─────────────────────────────────────────────────────────────────
 function SheetBody({
@@ -171,6 +219,9 @@ function SheetBody({
   isExpanded: boolean;
   onExpand: () => void;
 }) {
+  const activeStepId = useWorkflowStore(s => s.activeStepId);
+  const setActiveStep = useWorkflowStore(s => s.setActiveStep);
+
   return (
     <View>
       {/* ── Header ── */}
@@ -227,10 +278,17 @@ function SheetBody({
                 action={action}
                 index={i}
                 isCompleted={completedStepIds.has(action.id)}
+                isActive={activeStepId === action.id}
                 onToggle={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   toggleStep(action.id);
+                  // Auto-advance focus to next uncompleted step
+                  const nextStep = hazard.actions.find(
+                    (a: ActionStep, idx: number) => idx > i && !completedStepIds.has(a.id)
+                  );
+                  if (nextStep) setActiveStep(nextStep.id);
                 }}
+                onPress={() => setActiveStep(action.id)}
               />
             ))}
           </View>
@@ -250,6 +308,13 @@ function SheetBody({
 // ─────────────────────────────────────────────────────────────────
 // Portrait bottom sheet with 3 snap points
 // ─────────────────────────────────────────────────────────────────
+const CustomBackground = ({ style }: any) => (
+  <View style={[style, { overflow: 'hidden', borderTopLeftRadius: 28, borderTopRightRadius: 28 }]}>
+    <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+    <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,12,18,0.5)' }]} />
+  </View>
+);
+
 function PortraitSheet() {
   const {
     workflowState,
@@ -272,11 +337,11 @@ function PortraitSheet() {
   const snapPoints = useMemo(() => ['9%', '30%', '82%'], []);
 
   const isVisible =
-    workflowState === 'HAZARD_FOCUSED' || workflowState === 'SHEET_OPEN';
+    workflowState === 'HAZARD_FOCUSED' || workflowState === 'SHEET_OPEN' || workflowState === 'ANALYZING';
 
   // When workflow state changes, snap the sheet to the right position
   useEffect(() => {
-    if (workflowState === 'HAZARD_FOCUSED') {
+    if (workflowState === 'HAZARD_FOCUSED' || workflowState === 'ANALYZING') {
       sheetRef.current?.snapToIndex(1); // peek
       setSheetSnapIndex(1);
     } else if (workflowState === 'SHEET_OPEN') {
@@ -299,11 +364,18 @@ function PortraitSheet() {
     [workflowState, openSheet, setSheetSnapIndex]
   );
 
-  if (!isVisible || !selectedHazard) return null;
+  if (!isVisible) return null;
 
-  const color = RISK_COLOR[selectedHazard.riskLevel];
-  const riskLabel = RISK_LABEL[selectedHazard.riskLevel];
-  const allDone = selectedHazard.actions.every((a) => completedStepIds.has(a.id));
+  const isAnalyzing = workflowState === 'ANALYZING';
+
+  let color = '#fff';
+  let riskLabel = '';
+  let allDone = false;
+  if (selectedHazard) {
+    color = RISK_COLOR[selectedHazard.riskLevel];
+    riskLabel = RISK_LABEL[selectedHazard.riskLevel];
+    allDone = selectedHazard.actions.every((a) => completedStepIds.has(a.id));
+  }
   const isMinimized = sheetSnapIndex === 0;
 
   return (
@@ -331,23 +403,27 @@ function PortraitSheet() {
         snapPoints={snapPoints}
         enablePanDownToClose={false}   // don't fully close — just minimize to snap 0
         onChange={handleSheetChange}
-        backgroundStyle={styles.sheetBg}
+        backgroundComponent={CustomBackground}
         handleIndicatorStyle={styles.handle}
         style={styles.sheet}
       >
         {/* Don't render content when minimized (just show drag handle) */}
         {!isMinimized && (
           <BottomSheetScrollView contentContainerStyle={styles.scrollContent}>
-            <SheetBody
-              hazard={selectedHazard}
-              color={color}
-              riskLabel={riskLabel}
-              completedStepIds={completedStepIds}
-              toggleStep={toggleStep}
-              allDone={allDone}
-              isExpanded={workflowState === 'SHEET_OPEN' || sheetSnapIndex === 2}
-              onExpand={openSheet}
-            />
+            {isAnalyzing || !selectedHazard ? (
+              <SkeletonBody />
+            ) : (
+              <SheetBody
+                hazard={selectedHazard}
+                color={color}
+                riskLabel={riskLabel}
+                completedStepIds={completedStepIds}
+                toggleStep={toggleStep}
+                allDone={allDone}
+                isExpanded={workflowState === 'SHEET_OPEN' || sheetSnapIndex === 2}
+                onExpand={openSheet}
+              />
+            )}
           </BottomSheetScrollView>
         )}
       </BottomSheetGorhom>
@@ -368,7 +444,7 @@ function LandscapePanel() {
   const slideX = useSharedValue(panelW);
 
   const isVisible =
-    workflowState === 'HAZARD_FOCUSED' || workflowState === 'SHEET_OPEN';
+    workflowState === 'HAZARD_FOCUSED' || workflowState === 'SHEET_OPEN' || workflowState === 'ANALYZING';
 
   useEffect(() => {
     if (isVisible) {
@@ -384,11 +460,18 @@ function LandscapePanel() {
     transform: [{ translateX: slideX.value }],
   }));
 
-  if (!selectedHazard) return null;
+  const isAnalyzing = workflowState === 'ANALYZING';
 
-  const color = RISK_COLOR[selectedHazard.riskLevel];
-  const riskLabel = RISK_LABEL[selectedHazard.riskLevel];
-  const allDone = selectedHazard.actions.every((a) => completedStepIds.has(a.id));
+  if (!isVisible) return null;
+
+  let color = '#fff';
+  let riskLabel = '';
+  let allDone = false;
+  if (selectedHazard) {
+    color = RISK_COLOR[selectedHazard.riskLevel];
+    riskLabel = RISK_LABEL[selectedHazard.riskLevel];
+    allDone = selectedHazard.actions.every((a) => completedStepIds.has(a.id));
+  }
 
   return (
     <Animated.View
@@ -399,18 +482,24 @@ function LandscapePanel() {
       ]}
       pointerEvents={isVisible ? 'auto' : 'none'}
     >
+      <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(11,12,18,0.5)' }]} />
       <View style={styles.landscapeHandle} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <SheetBody
-          hazard={selectedHazard}
-          color={color}
-          riskLabel={riskLabel}
-          completedStepIds={completedStepIds}
-          toggleStep={toggleStep}
-          allDone={allDone}
-          isExpanded={true}
-          onExpand={openSheet}
-        />
+        {isAnalyzing || !selectedHazard ? (
+          <SkeletonBody />
+        ) : (
+          <SheetBody
+            hazard={selectedHazard}
+            color={color}
+            riskLabel={riskLabel}
+            completedStepIds={completedStepIds}
+            toggleStep={toggleStep}
+            allDone={allDone}
+            isExpanded={true}
+            onExpand={openSheet}
+          />
+        )}
       </ScrollView>
     </Animated.View>
   );
@@ -478,7 +567,7 @@ const styles = StyleSheet.create({
     top: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(11,12,18,0.97)',
+    overflow: 'hidden',
     borderLeftWidth: 1,
     borderLeftColor: 'rgba(255,255,255,0.07)',
     zIndex: 1000,
@@ -660,6 +749,14 @@ const styles = StyleSheet.create({
     color: '#f87171',
     letterSpacing: 0.6,
     textTransform: 'uppercase',
+  },
+  arPinBadge: {
+    backgroundColor: 'rgba(96,165,250,0.12)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.25)',
+    padding: 5,
+    marginRight: 4,
   },
   stepSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 17 },
   stepTime: { fontSize: 10, color: 'rgba(255,255,255,0.28)', marginTop: 3 },

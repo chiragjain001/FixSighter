@@ -46,10 +46,15 @@ function HazardPill({
     transform: [{ scale: scale.value }],
   }));
 
-  // Truncate title
-  const shortTitle = hazard.title.length > 9
-    ? hazard.title.slice(0, 8) + '...'
+  // Show up to 14 chars — enough to be meaningful
+  const shortTitle = hazard.title.length > 14
+    ? hazard.title.slice(0, 13) + '…'
     : hazard.title;
+
+  // Confidence as a readable percentage (e.g. 87%)
+  const confidenceLabel = hazard.confidence != null
+    ? `${Math.round(hazard.confidence * 100)}%`
+    : null;
 
   return (
     <Pressable onPress={handlePress}>
@@ -64,6 +69,9 @@ function HazardPill({
         >
           <View style={[styles.pillDot, { backgroundColor: dot }]} />
           <Text style={styles.pillText} numberOfLines={1}>{shortTitle}</Text>
+          {confidenceLabel && (
+            <Text style={styles.confidenceText}>{confidenceLabel}</Text>
+          )}
           {(hazard.riskLevel === 'CRITICAL' || hazard.riskLevel === 'HIGH') && (
             <AlertTriangle color={dot} size={12} strokeWidth={2.5} />
           )}
@@ -88,12 +96,13 @@ export function HazardSelectorBar() {
     workflowState,
     detectedHazards,
     selectedHazard,
-    focusHazard,
+    selectedHazardId,
+    selectHazardById,
     sheetSnapIndex,
   } = useWorkflowStore();
   const insets = useSafeAreaInsets();
 
-  // Show pills if no sheet OR if sheet is dragged fully down (snap index 0)
+  // Show pills when hazards are discovered OR when sheet is dragged fully down
   const pillsVisible =
     workflowState === 'HAZARDS_DISCOVERED' ||
     ((workflowState === 'HAZARD_FOCUSED' || workflowState === 'SHEET_OPEN') &&
@@ -101,7 +110,6 @@ export function HazardSelectorBar() {
 
   if (!pillsVisible || detectedHazards.length === 0) return null;
 
-  // Vertical position — above bottom safe area
   const bottomPos = insets.bottom + 28;
 
   return (
@@ -117,8 +125,8 @@ export function HazardSelectorBar() {
           <HazardPill
             key={h.id}
             hazard={h}
-            isSelected={selectedHazard?.id === h.id}
-            onPress={() => focusHazard(h)}
+            isSelected={selectedHazardId === h.id || selectedHazard?.id === h.id}
+            onPress={() => selectHazardById(h.id)}
           />
         ))}
       </View>
@@ -168,5 +176,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.1,
     flex: 1,
+  },
+  confidenceText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.45)',
+    letterSpacing: 0.2,
+    flexShrink: 0,
   },
 });

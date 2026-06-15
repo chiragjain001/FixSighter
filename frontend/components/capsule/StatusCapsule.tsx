@@ -107,7 +107,7 @@ export function StatusCapsule() {
   return (
     <Animated.View
       entering={FadeIn.duration(400)}
-      style={[styles.wrapper, { top: insets.top + 12 }]}
+      style={[styles.wrapper, { top: Math.max(insets.top, 30) + 12 }]}
     >
       {/* Main capsule */}
       <BlurView

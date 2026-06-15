@@ -244,7 +244,7 @@ export function LeftControls() {
   return (
     <Animated.View
       entering={FadeInLeft.delay(200).springify().damping(20)}
-      style={[styles.container, { top: insets.top + 60 }, containerStyle]}
+      style={[styles.container, { top: Math.max(insets.top, 30) + 60 }, containerStyle]}
       pointerEvents={isHidden ? 'none' : 'box-none'}
     >
       {/* ── Camera flip ── */}

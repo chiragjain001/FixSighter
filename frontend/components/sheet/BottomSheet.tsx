@@ -51,12 +51,11 @@ export function BottomSheet() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
   }, [triggerFallbackMode]);
 
-  // Map spatial_targets to StepCard-compatible steps
   const steps = spatial_targets.map((tgt, i) => ({
     id: tgt.id,
     stepNumber: i + 1,
     title: tgt.label,
-    subtitle: tgt.guidance,
+    subtitle: (tgt as any).guidance ?? '',
     icon: 'info',
     isCritical: tgt.type === 'threat_multiplier',
   }));

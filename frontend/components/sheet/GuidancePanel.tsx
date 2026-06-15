@@ -46,7 +46,7 @@ export function GuidancePanel() {
     id: tgt.id,
     stepNumber: i + 1,
     title: tgt.label,
-    subtitle: tgt.guidance,
+    subtitle: (tgt as any).guidance ?? '',
     icon: 'info',
     isCritical: tgt.type === 'threat_multiplier',
   }));

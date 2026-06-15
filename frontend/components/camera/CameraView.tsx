@@ -1,106 +1,115 @@
 import React, { useEffect, useCallback, useRef } from 'react';
-import { encode as btoaPolyfill } from 'base-64';
 import { StyleSheet, Text, View } from 'react-native';
 import {
   Camera,
   useCameraDevice,
   useCameraPermission,
   useFrameProcessor,
+  useCameraFormat,
 } from 'react-native-vision-camera';
 import { useTensorflowModel } from 'react-native-fast-tflite';
-import { useSharedValue, runOnJS } from 'react-native-worklets-core';
+import { useSharedValue, Worklets } from 'react-native-worklets-core';
 import { useResizePlugin } from 'vision-camera-resize-plugin';
 import { useWorkflowStore } from '../../store/workflowStore';
 import { useSceneStore } from '../../store/sceneStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { calculateIoU, assignStableId } from '../../src/utils/iouTracker';
-
-// ─── MobileNet SSD COCO label list (80 classes + background) ──────────────
-// Indices match the COCO SSD MobileNet v1 output tensor order.
-const COCO_LABELS = [
-  'background','person','bicycle','car','motorcycle','airplane','bus','train',
-  'truck','boat','traffic light','fire hydrant','stop sign','parking meter',
-  'bench','bird','cat','dog','horse','sheep','cow','elephant','bear','zebra',
-  'giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee','skis',
-  'snowboard','sports ball','kite','baseball bat','baseball glove','skateboard',
-  'surfboard','tennis racket','bottle','wine glass','cup','fork','knife','spoon',
-  'bowl','banana','apple','sandwich','orange','broccoli','carrot','hot dog',
-  'pizza','donut','cake','chair','couch','potted plant','bed','dining table',
-  'toilet','tv','laptop','mouse','remote','keyboard','cell phone','microwave',
-  'oven','toaster','sink','refrigerator','book','clock','vase','scissors',
-  'teddy bear','hair drier','toothbrush',
-];
-
-// ─── Base64 encoding (JS thread, uses base-64 polyfill) ─────────────────────
-function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const len = bytes.byteLength;
-  const chunkSize = 8192;
-  for (let i = 0; i < len; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    // @ts-ignore
-    binary += String.fromCharCode.apply(null, chunk);
-  }
-  return btoaPolyfill(binary); // polyfill works in React Native Hermes runtime
-}
+import { assignStableId } from '../../src/utils/iouTracker';
+import { AROverlayLayer } from '../ar/AROverlayLayer';
+import { useARTrackingStore } from '../../store/arTrackingStore';
+import * as FileSystem from 'expo-file-system';
 
 // ─── Component ────────────────────────────────────────────────────────────
 export function CameraView() {
   const { hasPermission, requestPermission } = useCameraPermission();
-  const { facing, torchEnabled, setCameraRef, cameraRef, startAnalysis } =
-    useWorkflowStore();
+  const { facing, torchEnabled, setCameraRef, cameraRef, startAnalysis } = useWorkflowStore();
   const { markAnalysisSent, analysisStatus, reset: resetScene } = useSceneStore();
   const { sendSceneFrame } = useWebSocket();
 
+  const localCameraRef = useRef<Camera>(null);
   const device = useCameraDevice(facing);
+  const format = useCameraFormat(device, [
+    { photoResolution: { width: 1080, height: 1080 } },
+    { videoResolution: { width: 1080, height: 1080 } },
+    { fps: 60 }
+  ]);
 
-  // ── Fix #2: TFLite model — file now exists at assets/models/detect.tflite
+  // TFLite model — file exists at assets/models/detect.tflite
   const model = useTensorflowModel(
     require('../../assets/models/detect.tflite')
   );
 
-  // ── Fix #3: resize plugin instance (worklet-safe, memory managed)
+  // resize plugin instance (worklet-safe, memory managed)
   const { resize } = useResizePlugin();
 
-  const [manualScanTrigger, setManualScanTrigger] = React.useState(0);
-  
-  // Sync manual trigger from store
+  // ── Manual scan trigger sync (optimized)
+  const manualScanTick = useWorkflowStore((state) => state.manualScanTick);
+  const manualTriggerSV = useSharedValue(0);
   useEffect(() => {
-    const unsub = useWorkflowStore.subscribe((state) => {
-      if (state.manualScanTick > manualScanTrigger) {
-        setManualScanTrigger(state.manualScanTick);
-      }
-    });
-    return unsub;
-  }, [manualScanTrigger]);
+    manualTriggerSV.value = manualScanTick;
+  }, [manualScanTick, manualTriggerSV]);
 
   // ── Permission request on mount
   useEffect(() => {
     if (!hasPermission) requestPermission();
   }, [hasPermission, requestPermission]);
 
-  // ── Fix for Test 13: 8s analysis timeout watchdog
+  // ── Watchdog timer (increased to 30s to avoid false failures on slow networks)
   useEffect(() => {
     if (analysisStatus !== 'analyzing') return;
     const t = setTimeout(() => {
       resetScene();
       useWorkflowStore.getState().reset();
-      console.warn('[FixSight] Analysis timed out — resetting to READY');
-    }, 8000);
+      console.warn('[FixSight] Analysis timed out (30s) — resetting to READY');
+    }, 30000);
     return () => clearTimeout(t);
   }, [analysisStatus, resetScene]);
 
-  // ── Step 2e: UI state update — separate from network layer
+  // ── UI state update — separate from network layer
   const onStableDetection = useCallback(
-    (base64Str: string, hazardBbox: number[]) => {
-      console.log(`[FixSight] onStableDetection triggered! Base64 size: ${base64Str.length}`);
-      
-      markAnalysisSent();
-      sendSceneFrame(base64Str, hazardBbox);
-      startAnalysis();
+    async (hazardBbox: number[]) => {
+      try {
+        if (!localCameraRef.current) return;
+        
+        console.log('[FixSight] Found stable object. Taking photo...');
+        
+        // Instead of doing heavy RGB-to-Base64 inside the Worklet thread,
+        // we let the native camera take a high-speed JPEG directly.
+        // This completely avoids all JSI TypedArray memory-drop bugs!
+        const photo = await localCameraRef.current.takePhoto({
+          flash: 'off',
+        });
+        
+        // Convert to Base64 using expo-file-system
+        const base64Str = await FileSystem.readAsStringAsync(photo.path, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        
+        console.log(`[FixSight] Photo encoded! Base64 size: ${base64Str.length}`);
+        
+        sendSceneFrame(base64Str, hazardBbox);
+        
+        // Only update UI state after successfully queueing the websocket send
+        markAnalysisSent();
+        startAnalysis();
+        
+      } catch (err) {
+        console.error('[FixSight] Failed to take/send photo:', err);
+      }
     },
     [markAnalysisSent, sendSceneFrame, startAnalysis]
   );
+  
+  const onStableDetectionJS = Worklets.createRunOnJS(onStableDetection);
+
+  // ── Feed TFLite detections into arTrackingStore every frame (tracker update)
+  // This keeps AR markers locked to moving objects after the VLM initializes them.
+  const updateTrackerFromDetections = useCallback(
+    (detections: { id: string; box: number[] }[]) => {
+      useARTrackingStore.getState().updateFromTracker(detections);
+    },
+    [],
+  );
+  const updateTrackerJS = Worklets.createRunOnJS(updateTrackerFromDetections);
 
   // ── Shared worklet state (persists between frames via useSharedValue)
   const stableCount   = useSharedValue<Record<string, number>>({});
@@ -108,26 +117,46 @@ export function CameraView() {
   const lastSeenFrame = useSharedValue<Record<string, number>>({});
   const lastSentAt    = useSharedValue(0);
   const frameCount    = useSharedValue(0);
-  const manualTriggerSV = useSharedValue(0);
-  useEffect(() => {
-    manualTriggerSV.value = manualScanTrigger;
-  }, [manualScanTrigger, manualTriggerSV]);
 
-  // Fix #6: ID counter owned by JS-side shared value, not module scope
+  // ID counter owned by JS-side shared value, not module scope
   const nextIdCounter = useSharedValue(1);
 
-  const THRESHOLD    = 5;    // Trigger fast: 5 consecutive frames (~150ms)
+  const THRESHOLD     = 5;    // Trigger fast: 5 consecutive frames (~150ms)
   const SEND_COOLDOWN = 3000; // ms minimum between sends
 
   // ─────────────────────────────────────────────────────────────────────────
   // useFrameProcessor runs off the UI thread in a JSI worklet context.
-  // Sub-tasks: 2a (camera) → 2b (TFLite) → 2c (debounce) are here.
-  // 2d (WS send) and 2e (UI state) are triggered via runOnJS.
   // ─────────────────────────────────────────────────────────────────────────
   const frameProcessor = useFrameProcessor(
     (frame) => {
       'worklet';
       frameCount.value += 1;
+
+      // Throttle TFLite execution to ~20 FPS (assuming 60fps camera) 
+      // This prevents CPU lockup and thermal throttling on Android.
+      if (frameCount.value % 3 !== 0) return;
+
+      // ── Sub-task 2a: Garbage collection ─────────────────────────────────
+      if (frameCount.value % 60 === 0) {
+        const activeIds = Object.keys(lastBboxes.value);
+        const stableKeys = Object.keys(stableCount.value);
+        const nextStable: Record<string, number> = {};
+        
+        for (let i = 0; i < stableKeys.length; i++) {
+          const key = stableKeys[i];
+          let found = false;
+          for (let j = 0; j < activeIds.length; j++) {
+            if (activeIds[j] === key) {
+              found = true;
+              break;
+            }
+          }
+          if (found) {
+            nextStable[key] = stableCount.value[key];
+          }
+        }
+        stableCount.value = nextStable;
+      }
 
       // ── Sub-task 2b: TFLite local detection ─────────────────────────────
       if (model.state === 'loading' || model.state === 'error') return;
@@ -142,11 +171,7 @@ export function CameraView() {
           dataType: 'uint8',
         });
 
-        // MobileNetSSD output tensors:
-        //   [0] locations  — Float32Array [1, 10, 4]  (normalized [y1,x1,y2,x2])
-        //   [1] classes    — Float32Array [1, 10]
-        //   [2] scores     — Float32Array [1, 10]
-        //   [3] numDets    — Float32Array [1]
+        // MobileNetSSD output tensors
         const outputs = tfModel.runSync([tensor]);
 
         const locations = outputs[0] as Float32Array;
@@ -155,36 +180,30 @@ export function CameraView() {
 
         const isManual = manualTriggerSV.value > 0;
         
-        // ── MANUAL OVERRIDE (works even if 0 objects are detected) ──
+        // ── MANUAL OVERRIDE ONLY (Triggers exactly one analysis) ──
         if (isManual) {
             manualTriggerSV.value = 0; // reset
             lastSentAt.value = Date.now();
             
-            // Capture full frame
-            const fullFrameBytes = resize(frame, {
-              scale: { width: 320, height: 320 },
-              pixelFormat: 'rgb',
-              dataType: 'uint8',
-            });
-            const b64 = uint8ToBase64(fullFrameBytes);
-            // Send empty bbox since it was a manual scan
-            runOnJS(onStableDetection)(b64, []);
+            // Send empty bbox or the highest confidence auto-tracked bbox if available
+            // For simplicity, we send empty to let VLM analyze the whole scene
+            onStableDetectionJS([]);
             return;
         }
 
-        // ── AUTO TRACKING ──
+        // ── AUTO TRACKING — collect all detected boxes for tracker update ──
+        const frameDetections: { id: string; box: number[] }[] = [];
+
         for (let i = 0; i < numDets; i++) {
           const score = scores[i];
-          if (score < 0.45) continue; // Skip low-confidence detections
+          if (score < 0.45) continue;
 
-          // MobileNetSSD box format: [y1, x1, y2, x2] normalized
           const y1 = locations[i * 4 + 0];
           const x1 = locations[i * 4 + 1];
           const y2 = locations[i * 4 + 2];
           const x2 = locations[i * 4 + 3];
-          const bbox = [x1, y1, x2, y2]; // convert to [x1,y1,x2,y2]
+          const bbox = [x1, y1, x2, y2];
 
-          // ── Sub-task 2c: Stabilization debounce with real IoU tracking ──
           const { id, nextIdCounter: newCounter } = assignStableId(
             bbox,
             lastBboxes.value,
@@ -196,31 +215,15 @@ export function CameraView() {
 
           const count = (stableCount.value[id] ?? 0) + 1;
           stableCount.value = { ...stableCount.value, [id]: count };
-
-          const now = Date.now();
-          
-          if (count >= THRESHOLD && (now - lastSentAt.value) > SEND_COOLDOWN) {
-            lastSentAt.value = now;
-            stableCount.value = { ...stableCount.value, [id]: 0 };
-
-            // ── Sub-task 2c: Real frame capture (320x320 for VLM context) ─
-            const fullFrameBytes = resize(frame, {
-              scale: { width: 320, height: 320 },
-              pixelFormat: 'rgb',
-              dataType: 'uint8',
-            });
-            const b64 = uint8ToBase64(fullFrameBytes);
-
-            // Bridge string to JS thread (avoids Uint8Array drop bug)
-            runOnJS(onStableDetection)(b64, bbox);
-
-            // Only send the first stable detection per cooldown window
-            break;
-          }
+          frameDetections.push({ id, box: bbox });
         }
-      } catch (err) {
-        // Log errors so we can see them in Metro console
-        console.log('[FrameProcessor Error]:', err);
+
+        // Push detections to JS thread for arTrackingStore smooth update
+        if (frameDetections.length > 0) {
+          updateTrackerJS(frameDetections);
+        }
+      } catch (err: any) {
+        console.log('[FrameProcessor Error]:', err.message || err);
       }
     },
     [model, resize]
@@ -243,17 +246,29 @@ export function CameraView() {
   }
 
   return (
-    <Camera
-      ref={(ref) => {
-        if (ref !== cameraRef) setCameraRef(ref);
-      }}
-      style={StyleSheet.absoluteFill}
-      device={device}
-      isActive={true}
-      frameProcessor={frameProcessor}
-      torch={torchEnabled ? 'on' : 'off'}
-      enableFpsGraph={__DEV__}
-    />
+    <>
+      <Camera
+        ref={(ref) => {
+          (localCameraRef as any).current = ref;
+          if (ref !== cameraRef) setCameraRef(ref);
+        }}
+        style={StyleSheet.absoluteFill}
+        device={device}
+        format={format}
+        isActive={true}
+        photo={true}
+        frameProcessor={frameProcessor}
+        torch={torchEnabled ? 'on' : 'off'}
+      />
+      
+      {/* 2.5D AR Spatial Overlays */}
+      <AROverlayLayer />
+      
+      {/* Scan Flash Effect */}
+      {analysisStatus === 'analyzing' && (
+        <View style={[StyleSheet.absoluteFill, styles.flash]} pointerEvents="none" />
+      )}
+    </>
   );
 }
 
@@ -265,4 +280,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   text: { color: 'rgba(255,255,255,0.5)', fontSize: 14 },
+  flash: { backgroundColor: 'rgba(255,255,255,0.2)' },
 });
