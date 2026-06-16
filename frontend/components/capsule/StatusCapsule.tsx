@@ -12,6 +12,7 @@ import Animated, {
 import { BlurView } from 'expo-blur';
 import { RotateCcw } from 'lucide-react-native';
 import { useWorkflowStore, WorkflowState } from '../../store/workflowStore';
+import { useWsStore } from '../../store/wsStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type StateConfig = {
@@ -62,8 +63,12 @@ const CONFIG: Record<WorkflowState, StateConfig> = {
 
 export function StatusCapsule() {
   const { workflowState, selectedHazard, reset } = useWorkflowStore();
+  const wsStatus = useWsStore((s) => s.wsStatus);
   const insets = useSafeAreaInsets();
   const cfg = CONFIG[workflowState];
+
+  // Show a transient WS status badge when not connected
+  const showWsWarning = wsStatus === 'connecting' || wsStatus === 'reconnecting' || wsStatus === 'offline';
 
   // Override label from selected hazard when applicable
   const label =
@@ -135,6 +140,14 @@ export function StatusCapsule() {
             <RotateCcw color="rgba(255,255,255,0.8)" size={16} strokeWidth={2.2} />
           </BlurView>
         </Pressable>
+      )}
+      {showWsWarning && (
+        <View style={styles.wsBadge}>
+          <View style={[styles.wsDot, { backgroundColor: wsStatus === 'offline' ? '#ef4444' : '#fbbf24' }]} />
+          <Text style={styles.wsText}>
+            {wsStatus === 'offline' ? 'Offline' : 'Connecting…'}
+          </Text>
+        </View>
       )}
     </Animated.View>
   );
@@ -208,5 +221,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(10,10,16,0.7)',
+  },
+  wsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 99,
+    backgroundColor: 'rgba(10,10,16,0.8)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  wsDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  wsText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.75)',
+    fontWeight: '500',
   },
 });

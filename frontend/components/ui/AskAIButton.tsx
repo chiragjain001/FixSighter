@@ -19,13 +19,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
-import { MessageSquareText, Send, X } from 'lucide-react-native';
+import { MessageCircle, Send, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as FileSystem from 'expo-file-system';
 import { useChatStore } from '../../store/chatStore';
-import { useWebSocket } from '../../hooks/useWebSocket';
-import { useARTrackingStore } from '../../store/arTrackingStore';
 import { useWorkflowStore } from '../../store/workflowStore';
+import { useARTrackingStore } from '../../store/arTrackingStore';
 import { ChatBubble } from './ChatBubble';
 
 /**
@@ -44,8 +42,7 @@ export function AskAIButton() {
   const { width } = useWindowDimensions();
   const workflowState = useWorkflowStore((s) => s.workflowState);
 
-  const { isOpen, open, close, isTyping, addUserMessage, getHistory } = useChatStore();
-  const { sendChatFrame } = useWebSocket();
+  const { isOpen, open, close, isTyping, addUserMessage } = useChatStore();
   const cameraRef = useWorkflowStore((s) => s.cameraRef);
 
   const [inputText, setInputText] = useState('');
@@ -81,12 +78,49 @@ export function AskAIButton() {
     try {
       if (!cameraRef) return;
       const photo = await cameraRef.takePhoto({ flash: 'off' });
-      
-      const b64 = await FileSystem.readAsStringAsync(photo.path, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      const response = await fetch(`file://${photo.path}`);
+      const blob = await response.blob();
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const b64 = (reader.result as string).split(',')[1];
+        
+        try {
+          const WS_URL = process.env.EXPO_PUBLIC_WS_URL || 'ws://192.168.0.15:8000/ws';
+          const HTTP_URL = WS_URL.replace('ws://', 'http://').replace('/ws', '/chat');
+          
+          const res = await fetch(HTTP_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              full_frame_b64: b64,
+              user_message: text,
+              session_id: 'default',
+              conversation_history: useChatStore.getState().getHistory(3),
+              device_context: { lighting: 'normal', motion: 'low', device_mode: 'chat' }
+            })
+          });
 
-      sendChatFrame(text, b64);
+          if (!res.ok) throw new Error('HTTP request failed');
+          
+          const data = await res.json();
+          
+          // Inject the response directly into the UI state
+          if (data.spatial_targets?.length > 0) {
+            useARTrackingStore.getState().initFromVLM(data.spatial_targets);
+          }
+          if (data.chat_focus_target_id) {
+            useARTrackingStore.getState().setChatFocusTarget(data.chat_focus_target_id);
+          }
+          const chatReply = data.chat_reply || data.summary || '';
+          useChatStore.getState().addAssistantMessage(chatReply, data.chat_focus_target_id ?? null);
+          useChatStore.getState().setTyping(false);
+
+        } catch (postError) {
+          console.error('[AskAI] HTTP POST failed:', postError);
+          useChatStore.getState().setTyping(false);
+        }
+      };
+      reader.readAsDataURL(blob);
     } catch (e) {
       console.error('[AskAI] Failed to capture frame:', e);
       useChatStore.getState().setTyping(false);
@@ -110,12 +144,10 @@ export function AskAIButton() {
           style={[styles.pillWrapper, { top: Math.max(insets.top, 30) + 16, right: 16 }]}
           pointerEvents="box-none"
         >
-          <Pressable onPress={handleOpen} hitSlop={8} style={({ pressed }) => [styles.pillContainer, pressed && { opacity: 0.8 }]}>
-            <BlurView intensity={50} tint="dark" style={StyleSheet.absoluteFill} />
-            <View style={styles.pillInner}>
-              <MessageSquareText color="rgba(255,255,255,0.9)" size={16} strokeWidth={2} />
-              <Text style={styles.pillText}>Ask AI</Text>
-            </View>
+          <Pressable onPress={handleOpen} style={({ pressed }) => [styles.pill, pressed && { opacity: 0.8 }]}>
+            <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
+            <MessageCircle color="#60a5fa" size={15} strokeWidth={2.5} />
+            <Text style={styles.pillText}>Ask AI</Text>
           </Pressable>
         </Animated.View>
       )}
@@ -170,25 +202,23 @@ const styles = StyleSheet.create({
     position: 'absolute',
     zIndex: 200,
   },
-  pillContainer: {
-    borderRadius: 30,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-    backgroundColor: 'rgba(10,12,20,0.4)',
-  },
-  pillInner: {
+  pill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 99,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.25)',
+    backgroundColor: 'rgba(10,12,20,0.7)',
   },
   pillText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
-    color: 'rgba(255,255,255,0.9)',
-    letterSpacing: 0.3,
+    color: '#60a5fa',
+    letterSpacing: 0.2,
   },
   inputWrapper: {
     position: 'absolute',

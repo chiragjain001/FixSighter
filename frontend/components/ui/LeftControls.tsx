@@ -242,11 +242,11 @@ export function LeftControls() {
   }));
 
   return (
-    <Animated.View
-      entering={FadeInLeft.delay(200).springify().damping(20)}
-      style={[styles.container, { top: Math.max(insets.top, 30) + 60 }, containerStyle]}
-      pointerEvents={isHidden ? 'none' : 'box-none'}
-    >
+    <Animated.View entering={FadeInLeft.delay(200).springify().damping(20)} style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <Animated.View
+        style={[styles.container, { top: Math.max(insets.top, 30) + 60 }, containerStyle]}
+        pointerEvents={isHidden ? 'none' : 'box-none'}
+      >
       {/* ── Camera flip ── */}
       <GlassBtn onPress={toggleFacing} size={48}>
         <RefreshCcw color="rgba(255,255,255,0.88)" size={19} strokeWidth={2.2} />
@@ -275,6 +275,7 @@ export function LeftControls() {
 
       {/* ── Scan button ── */}
       <ScanBtn />
+      </Animated.View>
     </Animated.View>
   );
 }

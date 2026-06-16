@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { BACKEND_WS_URL, BACKEND_URL } from '../src/config';
+import { BACKEND_WS_URL } from '../src/config';
 import { useSceneStore } from '../store/sceneStore';
 import { useWorkflowStore } from '../store/workflowStore';
 import { useUiStore } from '../store/uiStore';
@@ -150,91 +150,49 @@ export function useWebSocket() {
   }, [connect]);
 
   // ── sendSceneFrame ─────────────────────────────────────────────────────────
-  const sendSceneFrame = useCallback(async (full_frame_b64: string, hazard_focus_bbox: number[]) => {
+  const sendSceneFrame = useCallback((full_frame_b64: string, hazard_focus_bbox: number[]) => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      console.warn('[WS] Cannot send scene frame, WebSocket not open');
+      return;
+    }
     currentBbox.current = hazard_focus_bbox;
 
-    try {
-      const response = await fetch(`${BACKEND_URL}/analyze_scene`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: 'demo_session_1',
-          full_frame_b64,
-          hazard_focus_bbox,
-          device_context: {
-            lighting: 'normal',
-            motion: 'low',
-            device_mode: 'live_camera',
-          },
-        })
-      });
-
-      if (!response.ok) throw new Error('Network response was not ok');
-      const data = await response.json();
-      
-      // Ensure backwards-compat fields
-      if (!data.event) data.event = 'scene_analysis_complete';
-      
-      if (!validateSceneAnalysis(data)) {
-        console.warn('[HTTP] Malformed payload — skipping render', data);
-        resetScene();
-        resetWorkflow();
-        clearTracking();
-        return;
-      }
-      handleSceneAnalysis(data as unknown as SceneAnalysis);
-      
-    } catch (err) {
-      console.error('[HTTP] Error fetching scene analysis:', err);
-      resetScene();
-      resetWorkflow();
-      clearTracking();
-    }
-  }, [handleSceneAnalysis, resetScene, resetWorkflow, clearTracking]);
+    wsRef.current.send(JSON.stringify({
+      event: 'scene_frame_ready',
+      session_id: 'demo_session_1',
+      full_frame_b64,
+      hazard_focus_bbox,
+      device_context: {
+        lighting: 'normal',
+        motion: 'low',
+        device_mode: 'live_camera',
+      },
+    }));
+  }, []);
 
   // ── sendChatFrame ──────────────────────────────────────────────────────────
   // Phase 5: sends a text question + current camera frame to the backend.
-  const sendChatFrame = useCallback(async (user_message: string, full_frame_b64: string) => {
+  const sendChatFrame = useCallback((user_message: string, full_frame_b64: string) => {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      console.warn('[WS] Cannot send chat frame, WebSocket not open');
+      return;
+    }
     // Clear previous chat spotlight before sending
     useARTrackingStore.getState().setChatFocusTarget(null);
 
-    try {
-      const response = await fetch(`${BACKEND_URL}/analyze_chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: 'demo_session_1',
-          full_frame_b64,
-          user_message,
-          conversation_history: [], // chatStore.history injected by AskAIButton in Phase 5
-          device_context: {
-            lighting: 'normal',
-            motion: 'low',
-            device_mode: 'chat',
-          },
-        })
-      });
-
-      if (!response.ok) throw new Error('Network response was not ok');
-      const data = await response.json();
-      
-      if (!data.event) data.event = 'scene_analysis_complete';
-      handleSceneAnalysis(data as unknown as SceneAnalysis);
-      
-      // Phase 5 logic: Extract chat_reply
-      if (data.chat_reply) {
-        useChatStore.getState().addMessage(data.chat_reply, 'ai');
-        if (data.chat_focus_target_id) {
-          useARTrackingStore.getState().setChatFocusTarget(data.chat_focus_target_id);
-        }
-      }
-      useChatStore.getState().setTyping(false);
-      
-    } catch (err) {
-      console.error('[HTTP] Error fetching chat analysis:', err);
-      useChatStore.getState().setTyping(false);
-    }
-  }, [handleSceneAnalysis]);
+    wsRef.current.send(JSON.stringify({
+      event: 'chat_frame_query',
+      session_id: 'demo_session_1',
+      full_frame_b64,
+      user_message,
+      conversation_history: [], // chatStore.history injected by AskAIButton in Phase 5
+      device_context: {
+        lighting: 'normal',
+        motion: 'low',
+        device_mode: 'chat',
+      },
+    }));
+  }, []);
 
   return { sendSceneFrame, sendChatFrame };
 }

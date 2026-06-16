@@ -5,33 +5,26 @@ import {
   useCameraDevice,
   useCameraPermission,
   useFrameProcessor,
-  useCameraFormat,
 } from 'react-native-vision-camera';
 import { useTensorflowModel } from 'react-native-fast-tflite';
 import { useSharedValue, Worklets } from 'react-native-worklets-core';
 import { useResizePlugin } from 'vision-camera-resize-plugin';
 import { useWorkflowStore } from '../../store/workflowStore';
 import { useSceneStore } from '../../store/sceneStore';
-import { useWebSocket } from '../../hooks/useWebSocket';
+import { useWsStore } from '../../store/wsStore';
 import { assignStableId } from '../../src/utils/iouTracker';
 import { AROverlayLayer } from '../ar/AROverlayLayer';
 import { useARTrackingStore } from '../../store/arTrackingStore';
-import * as FileSystem from 'expo-file-system';
 
 // ─── Component ────────────────────────────────────────────────────────────
 export function CameraView() {
   const { hasPermission, requestPermission } = useCameraPermission();
   const { facing, torchEnabled, setCameraRef, cameraRef, startAnalysis } = useWorkflowStore();
   const { markAnalysisSent, analysisStatus, reset: resetScene } = useSceneStore();
-  const { sendSceneFrame } = useWebSocket();
+  const sendSceneFrame = useWsStore((s) => s.sendSceneFrame);
 
   const localCameraRef = useRef<Camera>(null);
   const device = useCameraDevice(facing);
-  const format = useCameraFormat(device, [
-    { photoResolution: { width: 1080, height: 1080 } },
-    { videoResolution: { width: 1080, height: 1080 } },
-    { fps: 60 }
-  ]);
 
   // TFLite model — file exists at assets/models/detect.tflite
   const model = useTensorflowModel(
@@ -79,18 +72,24 @@ export function CameraView() {
           flash: 'off',
         });
         
-        // Convert to Base64 using expo-file-system
-        const base64Str = await FileSystem.readAsStringAsync(photo.path, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        // Convert to Base64 using a standard JS FileReader asynchronously
+        const response = await fetch(`file://${photo.path}`);
+        const blob = await response.blob();
+        const reader = new FileReader();
         
-        console.log(`[FixSight] Photo encoded! Base64 size: ${base64Str.length}`);
+        reader.onloadend = () => {
+          const base64Str = (reader.result as string).split(',')[1];
+          console.log(`[FixSight] Photo encoded! Base64 size: ${base64Str.length}`);
+          
+          sendSceneFrame(base64Str, hazardBbox);
+          
+          // Only update UI state after successfully queueing the websocket send
+          markAnalysisSent();
+          startAnalysis();
+        };
         
-        sendSceneFrame(base64Str, hazardBbox);
-        
-        // Only update UI state after successfully queueing the websocket send
-        markAnalysisSent();
-        startAnalysis();
+        reader.onerror = (e) => console.error('[FixSight] FileReader error:', e);
+        reader.readAsDataURL(blob);
         
       } catch (err) {
         console.error('[FixSight] Failed to take/send photo:', err);
@@ -254,7 +253,6 @@ export function CameraView() {
         }}
         style={StyleSheet.absoluteFill}
         device={device}
-        format={format}
         isActive={true}
         photo={true}
         frameProcessor={frameProcessor}

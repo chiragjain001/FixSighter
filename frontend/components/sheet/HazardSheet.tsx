@@ -92,40 +92,42 @@ function StepCard({
         onPress();
       }}
     >
-      <Animated.View entering={FadeIn.delay(index * 80).duration(300)} style={[styles.stepCard, cardStyle]}>
-        <View style={[styles.stepNum, { backgroundColor: isCompleted ? 'rgba(74,222,128,0.18)' : 'rgba(255,255,255,0.08)' }]}>
-          <Text style={[styles.stepNumText, { color: isCompleted ? '#4ade80' : 'rgba(255,255,255,0.55)' }]}>
-            {index + 1}
-          </Text>
-        </View>
-        <View style={styles.stepBody}>
-          <View style={styles.stepTitleRow}>
-            <Text style={[styles.stepTitle, { opacity: isCompleted ? 0.45 : 1 }]} numberOfLines={2}>
-              {action.title}
+      <Animated.View entering={FadeIn.delay(index * 80).duration(300)}>
+        <Animated.View style={[styles.stepCard, cardStyle]}>
+          <View style={[styles.stepNum, { backgroundColor: isCompleted ? 'rgba(74,222,128,0.18)' : 'rgba(255,255,255,0.08)' }]}>
+            <Text style={[styles.stepNumText, { color: isCompleted ? '#4ade80' : 'rgba(255,255,255,0.55)' }]}>
+              {index + 1}
             </Text>
-            {action.isCritical && !isCompleted && (
-              <View style={styles.urgentTag}>
-                <Text style={styles.urgentText}>Urgent</Text>
-              </View>
+          </View>
+          <View style={styles.stepBody}>
+            <View style={styles.stepTitleRow}>
+              <Text style={[styles.stepTitle, { opacity: isCompleted ? 0.45 : 1 }]} numberOfLines={2}>
+                {action.title}
+              </Text>
+              {action.isCritical && !isCompleted && (
+                <View style={styles.urgentTag}>
+                  <Text style={styles.urgentText}>Urgent</Text>
+                </View>
+              )}
+            </View>
+            <Text style={[styles.stepSub, { opacity: isCompleted ? 0.35 : 0.6 }]}>{action.subtitle}</Text>
+            {action.estimatedTime && (
+              <Text style={styles.stepTime}>{action.estimatedTime}</Text>
             )}
           </View>
-          <Text style={[styles.stepSub, { opacity: isCompleted ? 0.35 : 0.6 }]}>{action.subtitle}</Text>
-          {action.estimatedTime && (
-            <Text style={styles.stepTime}>{action.estimatedTime}</Text>
+          {/* AR-pin indicator: shown when step is active — tells user AR is focused here */}
+          {isActive && !isCompleted && (
+            <Animated.View entering={FadeIn.duration(200)} style={styles.arPinBadge}>
+              <MapPin color="#60a5fa" size={13} strokeWidth={2.5} />
+            </Animated.View>
           )}
-        </View>
-        {/* AR-pin indicator: shown when step is active — tells user AR is focused here */}
-        {isActive && !isCompleted && (
-          <Animated.View entering={FadeIn.duration(200)} style={styles.arPinBadge}>
-            <MapPin color="#60a5fa" size={13} strokeWidth={2.5} />
-          </Animated.View>
-        )}
-        <Pressable onPress={onToggle} hitSlop={10}>
-          {isCompleted
-            ? <Animated.View entering={FadeIn.duration(200)}><CheckCircle color="#4ade80" size={26} strokeWidth={2} /></Animated.View>
-            : <Circle color={isActive ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.2)"} size={26} strokeWidth={1.5} />
-          }
-        </Pressable>
+          <Pressable onPress={onToggle} hitSlop={10}>
+            {isCompleted
+              ? <Animated.View entering={FadeIn.duration(200)}><CheckCircle color="#4ade80" size={26} strokeWidth={2} /></Animated.View>
+              : <Circle color={isActive ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.2)"} size={26} strokeWidth={1.5} />
+            }
+          </Pressable>
+        </Animated.View>
       </Animated.View>
     </Pressable>
   );

@@ -1,8 +1,9 @@
 import asyncio
 import json
 import sys
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,33 +34,6 @@ def health():
         return {"status": "running", "service": "FixSight Scene Analysis", "model": d.model}
     except EnvironmentError as e:
         return {"status": "degraded", "error": str(e)}
-
-@app.post("/analyze_scene")
-async def analyze_scene_http(payload: dict = Body(...)):
-    print(f"\n[Backend] 📸 POST /analyze_scene (size: {len(payload.get('full_frame_b64', ''))} chars)")
-    d = get_detector()
-    result = await asyncio.to_thread(
-        d.analyze_scene,
-        payload.get("full_frame_b64", ""),
-        payload.get("hazard_focus_bbox", []),
-        payload.get("session_id", "default"),
-        payload.get("device_context", {}),
-    )
-    return result
-
-@app.post("/analyze_chat")
-async def analyze_chat_http(payload: dict = Body(...)):
-    print(f"\n[Backend] 💬 POST /analyze_chat: \"{payload.get('user_message', '')[:60]}\"")
-    d = get_detector()
-    result = await asyncio.to_thread(
-        d.analyze_with_chat,
-        payload.get("full_frame_b64", ""),
-        payload.get("user_message", ""),
-        payload.get("session_id", "default"),
-        payload.get("device_context", {}),
-        payload.get("conversation_history", []),
-    )
-    return result
 
 
 @app.websocket("/ws")
@@ -137,3 +111,26 @@ def reset():
     if _detector:
         _detector.sessions.clear()
     return {"status": "ok"}
+
+class ChatRequest(BaseModel):
+    full_frame_b64: str
+    user_message: str
+    session_id: str = "default"
+    device_context: dict = {}
+    conversation_history: list = []
+
+@app.post("/chat")
+async def chat_endpoint(req: ChatRequest):
+    try:
+        detector = get_detector()
+        result = await asyncio.to_thread(
+            detector.analyze_with_chat,
+            req.full_frame_b64,
+            req.user_message,
+            req.session_id,
+            req.device_context,
+            req.conversation_history,
+        )
+        return result
+    except Exception as e:
+        return {"event": "error", "message": str(e)}
